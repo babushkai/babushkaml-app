@@ -2299,8 +2299,12 @@ async fn start_oauth_server(app: AppHandle) -> CommandResult<OAuthServerInfo> {
                 }
             }
             
-            // Emit event to frontend
-            let _ = app_handle.emit("oauth-callback", result);
+            // Emit event to frontend (emit to all windows)
+            eprintln!("[OAuth] Emitting oauth-callback event to frontend");
+            match app_handle.emit("oauth-callback", &result) {
+                Ok(_) => eprintln!("[OAuth] Event emitted successfully"),
+                Err(e) => eprintln!("[OAuth] Failed to emit event: {:?}", e),
+            }
             
             // Return success HTML
             r#"<!DOCTYPE html>

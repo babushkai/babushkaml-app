@@ -107,9 +107,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     })
 
-    // Listen for auth changes
+    // Listen for auth changes - this should fire when setSession() is called
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
+      console.log('[Auth] onAuthStateChange:', event, session?.user?.email)
+      
+      if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
+        console.log('[Auth] User signed in via onAuthStateChange, updating state...')
         const { profile, license } = await fetchProfileAndLicense(session.user)
         setState({
           user: session.user,
@@ -119,7 +122,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           isAuthenticated: true,
           isLoading: false,
         })
+        console.log('[Auth] State updated from onAuthStateChange')
       } else if (event === 'SIGNED_OUT') {
+        console.log('[Auth] User signed out')
         setState({
           user: null,
           profile: null,
@@ -136,6 +141,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     
     const setupOAuthListener = async () => {
       try {
+        console.log('[Auth] Setting up OAuth event listener...')
         // Listen for OAuth callback events from the Rust backend
         unlistenOAuth = await listen<{ 
           access_token?: string; 
@@ -143,14 +149,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           code?: string; 
           error?: string 
         }>('oauth-callback', async (event) => {
-          console.log('[Auth] OAuth callback received:', event.payload)
+          console.log('[Auth] *** OAuth callback event received! ***')
+          console.log('[Auth] Event payload:', event.payload)
           
           if (event.payload.error) {
             console.error('[Auth] OAuth error:', event.payload.error)
             return
           }
           
-          // Handle tokens directly (from landing page)
+          // Handle tokens directly (from localhost server)
           if (event.payload.access_token && event.payload.refresh_token) {
             console.log('[Auth] Setting session from tokens...')
             try {
@@ -165,8 +172,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               }
               
               if (data.session) {
-                console.log('[Auth] Session set successfully!')
+                console.log('[Auth] Session set successfully! Updating state...')
+                // Fetch profile and update state immediately
                 const { profile, license } = await fetchProfileAndLicense(data.session.user)
+                console.log('[Auth] Profile fetched, setting authenticated state')
                 setState({
                   user: data.session.user,
                   profile,
@@ -175,6 +184,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   isAuthenticated: true,
                   isLoading: false,
                 })
+                console.log('[Auth] State updated - user should now be logged in')
               }
             } catch (err) {
               console.error('[Auth] Error setting session:', err)
@@ -272,6 +282,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await open(data.url)
       
       console.log('[Auth] Opened Google OAuth in browser')
+      
+      // Poll for session as fallback (in case event isn't received)
+      console.log('[Auth] Starting session polling fallback...')
+      const pollForSession = async () => {
+        for (let i = 0; i < 60; i++) { // Poll for up to 60 seconds
+          await new Promise(r => setTimeout(r, 1000))
+          const { data: { session } } = await supabase.auth.getSession()
+          if (session) {
+            console.log('[Auth] Session detected via polling!')
+            const { profile, license } = await fetchProfileAndLicense(session.user)
+            setState({
+              user: session.user,
+              profile,
+              session,
+              license,
+              isAuthenticated: true,
+              isLoading: false,
+            })
+            return
+          }
+        }
+        console.log('[Auth] Polling timeout - no session detected')
+      }
+      pollForSession() // Don't await, run in background
+      
     } catch (err) {
       console.error('[Auth] Google OAuth error:', err)
       throw err
@@ -301,6 +336,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await open(data.url)
       
       console.log('[Auth] Opened GitHub OAuth in browser')
+      
+      // Poll for session as fallback (in case event isn't received)
+      console.log('[Auth] Starting session polling fallback...')
+      const pollForSession = async () => {
+        for (let i = 0; i < 60; i++) { // Poll for up to 60 seconds
+          await new Promise(r => setTimeout(r, 1000))
+          const { data: { session } } = await supabase.auth.getSession()
+          if (session) {
+            console.log('[Auth] Session detected via polling!')
+            const { profile, license } = await fetchProfileAndLicense(session.user)
+            setState({
+              user: session.user,
+              profile,
+              session,
+              license,
+              isAuthenticated: true,
+              isLoading: false,
+            })
+            return
+          }
+        }
+        console.log('[Auth] Polling timeout - no session detected')
+      }
+      pollForSession() // Don't await, run in background
+      
     } catch (err) {
       console.error('[Auth] GitHub OAuth error:', err)
       throw err
