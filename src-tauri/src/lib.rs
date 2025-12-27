@@ -2228,6 +2228,146 @@ async fn check_docker_image(image: String, tag: String) -> CommandResult<bool> {
     Ok(images.contains(&full_image))
 }
 
+// ============= OAuth Local Server =============
+
+use std::sync::Arc;
+use tokio::sync::oneshot;
+
+/// Response from starting the OAuth server
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OAuthServerInfo {
+    pub port: u16,
+    pub callback_url: String,
+}
+
+/// OAuth callback result
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OAuthCallbackResult {
+    pub code: Option<String>,
+    pub error: Option<String>,
+    pub state: Option<String>,
+}
+
+/// Start a local HTTP server to receive OAuth callback
+#[tauri::command]
+async fn start_oauth_server(app: AppHandle) -> CommandResult<OAuthServerInfo> {
+    use axum::{
+        extract::Query,
+        response::Html,
+        routing::get,
+        Router,
+    };
+    use std::net::SocketAddr;
+    
+    // Create a channel to receive the OAuth callback
+    let (tx, rx) = oneshot::channel::<OAuthCallbackResult>();
+    let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
+    
+    // Clone for the handler
+    let app_handle = app.clone();
+    let tx_clone = tx.clone();
+    
+    // Create the callback handler
+    let callback_handler = move |Query(params): Query<std::collections::HashMap<String, String>>| {
+        let code = params.get("code").cloned();
+        let error = params.get("error").cloned();
+        let state = params.get("state").cloned();
+        
+        eprintln!("[OAuth] Callback received - code: {:?}, error: {:?}", code.is_some(), error);
+        
+        let result = OAuthCallbackResult { code: code.clone(), error: error.clone(), state };
+        
+        // Send result through channel
+        if let Ok(mut guard) = tx_clone.lock() {
+            if let Some(sender) = guard.take() {
+                let _ = sender.send(result.clone());
+            }
+        }
+        
+        // Emit event to frontend
+        let _ = app_handle.emit("oauth-callback", result);
+        
+        // Return HTML response
+        let html = if code.is_some() {
+            r#"
+            <!DOCTYPE html>
+            <html>
+            <head><title>Authentication Successful</title>
+            <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; 
+                       display: flex; justify-content: center; align-items: center; 
+                       height: 100vh; margin: 0; background: #1a1a2e; color: white; }
+                .container { text-align: center; }
+                .success { color: #4ade80; font-size: 48px; }
+                h1 { margin-top: 20px; }
+                p { color: #888; }
+            </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="success">✓</div>
+                    <h1>Authentication Successful!</h1>
+                    <p>You can close this window and return to BabushkaML.</p>
+                </div>
+            </body>
+            </html>
+            "#
+        } else {
+            r#"
+            <!DOCTYPE html>
+            <html>
+            <head><title>Authentication Failed</title>
+            <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; 
+                       display: flex; justify-content: center; align-items: center; 
+                       height: 100vh; margin: 0; background: #1a1a2e; color: white; }
+                .container { text-align: center; }
+                .error { color: #f87171; font-size: 48px; }
+                h1 { margin-top: 20px; }
+                p { color: #888; }
+            </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="error">✗</div>
+                    <h1>Authentication Failed</h1>
+                    <p>Please close this window and try again.</p>
+                </div>
+            </body>
+            </html>
+            "#
+        };
+        
+        async move { Html(html) }
+    };
+    
+    // Create router
+    let router = Router::new()
+        .route("/callback", get(callback_handler));
+    
+    // Find an available port
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await
+        .map_err(|e| CommandError { message: format!("Failed to bind: {}", e) })?;
+    
+    let port = listener.local_addr()
+        .map_err(|e| CommandError { message: format!("Failed to get port: {}", e) })?
+        .port();
+    
+    let callback_url = format!("http://127.0.0.1:{}/callback", port);
+    
+    eprintln!("[OAuth] Starting local server on port {}", port);
+    eprintln!("[OAuth] Callback URL: {}", callback_url);
+    
+    // Spawn the server
+    tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("OAuth server error");
+    });
+    
+    Ok(OAuthServerInfo { port, callback_url })
+}
+
 // ============= App Entry Point =============
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2297,6 +2437,8 @@ pub fn run() {
             pull_docker_image,
             list_docker_images,
             check_docker_image,
+            // OAuth
+            start_oauth_server,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

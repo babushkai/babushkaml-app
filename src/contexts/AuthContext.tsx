@@ -1,7 +1,8 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
-import { supabase, validateLicense, getMachineId, API_URL } from '../lib/supabase'
+import { supabase, validateLicense, getMachineId } from '../lib/supabase'
 import type { User, Session } from '@supabase/supabase-js'
-import { onOpenUrl, getCurrent } from '@tauri-apps/plugin-deep-link'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 
 export interface UserProfile {
   id: string
@@ -87,49 +88,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState(prev => ({ ...prev, license }))
   }, [state.user])
 
-  // Handle deep link auth callback
-  const handleAuthCallback = useCallback(async (url: string) => {
-    console.log('[Auth] Received deep link callback:', url)
-    
-    // Parse the URL - format: babushkaml://auth#access_token=xxx&refresh_token=xxx&...
-    // or babushkaml://auth?access_token=xxx&refresh_token=xxx&...
-    try {
-      const hashOrQuery = url.includes('#') ? url.split('#')[1] : url.split('?')[1]
-      if (!hashOrQuery) {
-        console.error('[Auth] No tokens in callback URL')
-        return
-      }
-      
-      const params = new URLSearchParams(hashOrQuery)
-      const accessToken = params.get('access_token')
-      const refreshToken = params.get('refresh_token')
-      
-      if (accessToken && refreshToken) {
-        console.log('[Auth] Setting session from deep link tokens')
-        const { data, error } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        })
-        
-        if (error) {
-          console.error('[Auth] Failed to set session:', error)
-        } else if (data.session) {
-          console.log('[Auth] Session set successfully')
-          const { profile, license } = await fetchProfileAndLicense(data.session.user)
-          setState({
-            user: data.session.user,
-            profile,
-            session: data.session,
-            license,
-            isAuthenticated: true,
-            isLoading: false,
-          })
-        }
-      }
-    } catch (err) {
-      console.error('[Auth] Error processing auth callback:', err)
-    }
-  }, [fetchProfileAndLicense])
 
   // Initialize auth state
   useEffect(() => {
@@ -173,48 +131,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     })
 
-    // Listen for deep link auth callbacks (from OAuth in browser)
-    let unlistenDeepLink: (() => void) | undefined
+    // Listen for OAuth callback from local server
+    let unlistenOAuth: (() => void) | undefined
     
-    const setupDeepLinkListener = async () => {
+    const setupOAuthListener = async () => {
       try {
-        // Check if app was opened via deep link on startup
-        const currentUrls = await getCurrent()
-        console.log('[Auth] Checking startup deep links:', currentUrls)
-        if (currentUrls && currentUrls.length > 0) {
-          for (const url of currentUrls) {
-            if (url.startsWith('babushkaml://auth')) {
-              console.log('[Auth] Found auth deep link on startup:', url)
-              handleAuthCallback(url)
-            }
+        // Listen for OAuth callback events from the Rust backend
+        unlistenOAuth = await listen<{ code?: string; error?: string }>('oauth-callback', async (event) => {
+          console.log('[Auth] OAuth callback received:', event.payload)
+          
+          if (event.payload.error) {
+            console.error('[Auth] OAuth error:', event.payload.error)
+            return
           }
-        }
-        
-        // Listen for deep links while app is running
-        unlistenDeepLink = await onOpenUrl((urls) => {
-          console.log('[Auth] Deep link received:', urls)
-          for (const url of urls) {
-            if (url.startsWith('babushkaml://auth')) {
-              console.log('[Auth] Processing auth deep link:', url)
-              handleAuthCallback(url)
+          
+          if (event.payload.code) {
+            console.log('[Auth] Exchanging code for session...')
+            try {
+              // Exchange the authorization code for a session
+              const { data, error } = await supabase.auth.exchangeCodeForSession(event.payload.code)
+              
+              if (error) {
+                console.error('[Auth] Failed to exchange code:', error)
+                return
+              }
+              
+              if (data.session) {
+                console.log('[Auth] Session obtained successfully!')
+                const { profile, license } = await fetchProfileAndLicense(data.session.user)
+                setState({
+                  user: data.session.user,
+                  profile,
+                  session: data.session,
+                  license,
+                  isAuthenticated: true,
+                  isLoading: false,
+                })
+              }
+            } catch (err) {
+              console.error('[Auth] Error exchanging code:', err)
             }
           }
         })
-        console.log('[Auth] Deep link listener setup complete')
+        console.log('[Auth] OAuth listener setup complete')
       } catch (err) {
-        console.error('[Auth] Failed to setup deep link listener:', err)
+        console.error('[Auth] Failed to setup OAuth listener:', err)
       }
     }
     
-    setupDeepLinkListener()
+    setupOAuthListener()
 
     return () => {
       subscription.unsubscribe()
-      if (unlistenDeepLink) {
-        unlistenDeepLink()
+      if (unlistenOAuth) {
+        unlistenOAuth()
       }
     }
-  }, [fetchProfileAndLicense, handleAuthCallback])
+  }, [fetchProfileAndLicense])
 
   // Refresh license periodically (every hour)
   useEffect(() => {
@@ -226,15 +199,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // For desktop apps, OAuth opens browser with redirect back to the app via deep link
   // Flow: App → Browser (OAuth) → Landing page callback → Deep link back to app
   
+  // Start local OAuth server and get callback URL
+  const startLocalOAuthServer = async (): Promise<string> => {
+    try {
+      const result = await invoke<{ port: number; callback_url: string }>('start_oauth_server')
+      console.log('[Auth] Local OAuth server started:', result)
+      return result.callback_url
+    } catch (err) {
+      console.error('[Auth] Failed to start OAuth server:', err)
+      throw err
+    }
+  }
+
   const signInWithGoogle = async () => {
     try {
-      // Get OAuth URL from Supabase with desktop-specific callback
+      // Start local server to receive OAuth callback
+      const callbackUrl = await startLocalOAuthServer()
+      console.log('[Auth] Using callback URL:', callbackUrl)
+      
+      // Get OAuth URL from Supabase with localhost callback
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           skipBrowserRedirect: true,
-          // Use dedicated desktop callback path
-          redirectTo: `${API_URL}/auth/callback/desktop`,
+          redirectTo: callbackUrl,
         },
       })
       
@@ -254,13 +242,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInWithGitHub = async () => {
     try {
-      // Get OAuth URL from Supabase with desktop-specific callback
+      // Start local server to receive OAuth callback
+      const callbackUrl = await startLocalOAuthServer()
+      console.log('[Auth] Using callback URL:', callbackUrl)
+      
+      // Get OAuth URL from Supabase with localhost callback
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'github',
         options: {
           skipBrowserRedirect: true,
-          // Use dedicated desktop callback path
-          redirectTo: `${API_URL}/auth/callback/desktop`,
+          redirectTo: callbackUrl,
         },
       })
       
