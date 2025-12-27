@@ -2282,22 +2282,28 @@ async fn start_oauth_server(app: AppHandle) -> CommandResult<OAuthServerInfo> {
         eprintln!("[OAuth] Callback received - access_token: {:?}, refresh_token: {:?}, code: {:?}, error: {:?}", 
                   has_access, has_refresh, has_code, error);
         
-        let result = OAuthCallbackResult { access_token, refresh_token, code, error };
-        
-        // Send result through channel
-        if let Ok(mut guard) = tx_clone.lock() {
-            if let Some(sender) = guard.take() {
-                let _ = sender.send(result.clone());
+        // Determine HTML response based on what we received
+        let html = if has_access && has_refresh {
+            // We have tokens! Emit to frontend
+            let result = OAuthCallbackResult { 
+                access_token, 
+                refresh_token, 
+                code, 
+                error 
+            };
+            
+            // Send result through channel
+            if let Ok(mut guard) = tx_clone.lock() {
+                if let Some(sender) = guard.take() {
+                    let _ = sender.send(result.clone());
+                }
             }
-        }
-        
-        // Emit event to frontend
-        let _ = app_handle.emit("oauth-callback", result);
-        
-        // Return HTML response (success if we have tokens or code)
-        let html = if has_access || has_code {
-            r#"
-            <!DOCTYPE html>
+            
+            // Emit event to frontend
+            let _ = app_handle.emit("oauth-callback", result);
+            
+            // Return success HTML
+            r#"<!DOCTYPE html>
             <html>
             <head><title>Authentication Successful</title>
             <style>
@@ -2317,32 +2323,59 @@ async fn start_oauth_server(app: AppHandle) -> CommandResult<OAuthServerInfo> {
                     <p>You can close this window and return to BabushkaML.</p>
                 </div>
             </body>
-            </html>
-            "#
+            </html>"#.to_string()
         } else {
-            r#"
-            <!DOCTYPE html>
+            // No query params - serve a page that extracts hash fragment and redirects
+            // This handles Supabase's implicit flow which puts tokens in the hash
+            r#"<!DOCTYPE html>
             <html>
-            <head><title>Authentication Failed</title>
+            <head><title>Processing Authentication...</title>
             <style>
                 body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; 
                        display: flex; justify-content: center; align-items: center; 
                        height: 100vh; margin: 0; background: #1a1a2e; color: white; }
                 .container { text-align: center; }
-                .error { color: #f87171; font-size: 48px; }
+                .spinner { width: 48px; height: 48px; border: 4px solid #333; 
+                           border-top-color: #4ade80; border-radius: 50%; 
+                           animation: spin 1s linear infinite; margin: 0 auto; }
+                @keyframes spin { to { transform: rotate(360deg); } }
                 h1 { margin-top: 20px; }
                 p { color: #888; }
             </style>
             </head>
             <body>
                 <div class="container">
-                    <div class="error">✗</div>
-                    <h1>Authentication Failed</h1>
-                    <p>Please close this window and try again.</p>
+                    <div class="spinner"></div>
+                    <h1>Processing...</h1>
+                    <p>Please wait while we complete authentication.</p>
                 </div>
+                <script>
+                    // Extract tokens from hash fragment
+                    const hash = window.location.hash.substring(1);
+                    if (hash) {
+                        const params = new URLSearchParams(hash);
+                        const accessToken = params.get('access_token');
+                        const refreshToken = params.get('refresh_token');
+                        
+                        if (accessToken && refreshToken) {
+                            // Redirect to same URL but with tokens as query params
+                            const url = new URL(window.location.href.split('#')[0]);
+                            url.searchParams.set('access_token', accessToken);
+                            url.searchParams.set('refresh_token', refreshToken);
+                            window.location.href = url.toString();
+                        } else {
+                            document.querySelector('h1').textContent = 'Authentication Failed';
+                            document.querySelector('p').textContent = 'No tokens found in response.';
+                            document.querySelector('.spinner').style.display = 'none';
+                        }
+                    } else {
+                        document.querySelector('h1').textContent = 'Authentication Failed';
+                        document.querySelector('p').textContent = 'No authentication data received.';
+                        document.querySelector('.spinner').style.display = 'none';
+                    }
+                </script>
             </body>
-            </html>
-            "#
+            </html>"#.to_string()
         };
         
         async move { Html(html) }

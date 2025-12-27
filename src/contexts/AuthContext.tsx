@@ -254,15 +254,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const callbackUrl = await startLocalOAuthServer()
       console.log('[Auth] Local server ready at:', callbackUrl)
       
-      // Redirect through landing page which will forward tokens to localhost
-      const landingCallback = `https://babushkaml.com/auth/callback/desktop?localhost_port=9876`
-      
-      // Get OAuth URL from Supabase
+      // Get OAuth URL from Supabase - redirect directly to localhost
+      // The localhost server will extract tokens from hash fragment via JS
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           skipBrowserRedirect: true,
-          redirectTo: landingCallback,
+          redirectTo: callbackUrl,
         },
       })
       
@@ -286,15 +284,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const callbackUrl = await startLocalOAuthServer()
       console.log('[Auth] Local server ready at:', callbackUrl)
       
-      // Redirect through landing page which will forward tokens to localhost
-      const landingCallback = `https://babushkaml.com/auth/callback/desktop?localhost_port=9876`
-      
-      // Get OAuth URL from Supabase
+      // Get OAuth URL from Supabase - redirect directly to localhost
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'github',
         options: {
           skipBrowserRedirect: true,
-          redirectTo: landingCallback,
+          redirectTo: callbackUrl,
         },
       })
       
