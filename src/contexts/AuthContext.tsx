@@ -137,7 +137,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const setupOAuthListener = async () => {
       try {
         // Listen for OAuth callback events from the Rust backend
-        unlistenOAuth = await listen<{ code?: string; error?: string }>('oauth-callback', async (event) => {
+        unlistenOAuth = await listen<{ 
+          access_token?: string; 
+          refresh_token?: string;
+          code?: string; 
+          error?: string 
+        }>('oauth-callback', async (event) => {
           console.log('[Auth] OAuth callback received:', event.payload)
           
           if (event.payload.error) {
@@ -145,10 +150,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return
           }
           
+          // Handle tokens directly (from landing page)
+          if (event.payload.access_token && event.payload.refresh_token) {
+            console.log('[Auth] Setting session from tokens...')
+            try {
+              const { data, error } = await supabase.auth.setSession({
+                access_token: event.payload.access_token,
+                refresh_token: event.payload.refresh_token,
+              })
+              
+              if (error) {
+                console.error('[Auth] Failed to set session:', error)
+                return
+              }
+              
+              if (data.session) {
+                console.log('[Auth] Session set successfully!')
+                const { profile, license } = await fetchProfileAndLicense(data.session.user)
+                setState({
+                  user: data.session.user,
+                  profile,
+                  session: data.session,
+                  license,
+                  isAuthenticated: true,
+                  isLoading: false,
+                })
+              }
+            } catch (err) {
+              console.error('[Auth] Error setting session:', err)
+            }
+            return
+          }
+          
+          // Handle code exchange (fallback)
           if (event.payload.code) {
             console.log('[Auth] Exchanging code for session...')
             try {
-              // Exchange the authorization code for a session
               const { data, error } = await supabase.auth.exchangeCodeForSession(event.payload.code)
               
               if (error) {
@@ -213,16 +250,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInWithGoogle = async () => {
     try {
-      // Start local server to receive OAuth callback
+      // Start local server to receive tokens
       const callbackUrl = await startLocalOAuthServer()
-      console.log('[Auth] Using callback URL:', callbackUrl)
+      console.log('[Auth] Local server ready at:', callbackUrl)
       
-      // Get OAuth URL from Supabase with localhost callback
+      // Redirect through landing page which will forward tokens to localhost
+      const landingCallback = `https://babushkaml.com/auth/callback/desktop?localhost_port=9876`
+      
+      // Get OAuth URL from Supabase
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           skipBrowserRedirect: true,
-          redirectTo: callbackUrl,
+          redirectTo: landingCallback,
         },
       })
       
@@ -242,16 +282,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInWithGitHub = async () => {
     try {
-      // Start local server to receive OAuth callback
+      // Start local server to receive tokens
       const callbackUrl = await startLocalOAuthServer()
-      console.log('[Auth] Using callback URL:', callbackUrl)
+      console.log('[Auth] Local server ready at:', callbackUrl)
       
-      // Get OAuth URL from Supabase with localhost callback
+      // Redirect through landing page which will forward tokens to localhost
+      const landingCallback = `https://babushkaml.com/auth/callback/desktop?localhost_port=9876`
+      
+      // Get OAuth URL from Supabase
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'github',
         options: {
           skipBrowserRedirect: true,
-          redirectTo: callbackUrl,
+          redirectTo: landingCallback,
         },
       })
       

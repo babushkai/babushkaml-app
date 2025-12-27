@@ -2243,9 +2243,10 @@ pub struct OAuthServerInfo {
 /// OAuth callback result
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OAuthCallbackResult {
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
     pub code: Option<String>,
     pub error: Option<String>,
-    pub state: Option<String>,
 }
 
 /// Start a local HTTP server to receive OAuth callback
@@ -2269,13 +2270,15 @@ async fn start_oauth_server(app: AppHandle) -> CommandResult<OAuthServerInfo> {
     
     // Create the callback handler
     let callback_handler = move |Query(params): Query<std::collections::HashMap<String, String>>| {
+        let access_token = params.get("access_token").cloned();
+        let refresh_token = params.get("refresh_token").cloned();
         let code = params.get("code").cloned();
         let error = params.get("error").cloned();
-        let state = params.get("state").cloned();
         
-        eprintln!("[OAuth] Callback received - code: {:?}, error: {:?}", code.is_some(), error);
+        eprintln!("[OAuth] Callback received - access_token: {:?}, refresh_token: {:?}, code: {:?}, error: {:?}", 
+                  access_token.is_some(), refresh_token.is_some(), code.is_some(), error);
         
-        let result = OAuthCallbackResult { code: code.clone(), error: error.clone(), state };
+        let result = OAuthCallbackResult { access_token, refresh_token, code, error };
         
         // Send result through channel
         if let Ok(mut guard) = tx_clone.lock() {
@@ -2345,14 +2348,13 @@ async fn start_oauth_server(app: AppHandle) -> CommandResult<OAuthServerInfo> {
     let router = Router::new()
         .route("/callback", get(callback_handler));
     
-    // Find an available port
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await
-        .map_err(|e| CommandError { message: format!("Failed to bind: {}", e) })?;
+    // Use a fixed port (required for Supabase redirect URL configuration)
+    const OAUTH_PORT: u16 = 9876;
     
-    let port = listener.local_addr()
-        .map_err(|e| CommandError { message: format!("Failed to get port: {}", e) })?
-        .port();
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", OAUTH_PORT)).await
+        .map_err(|e| CommandError { message: format!("Failed to bind to port {}: {}. Is another instance running?", OAUTH_PORT, e) })?;
     
+    let port = OAUTH_PORT;
     let callback_url = format!("http://127.0.0.1:{}/callback", port);
     
     eprintln!("[OAuth] Starting local server on port {}", port);
