@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 import { supabase, validateLicense, getMachineId, API_URL } from '../lib/supabase'
 import type { User, Session } from '@supabase/supabase-js'
-import { listen } from '@tauri-apps/api/event'
+import { onOpenUrl, getCurrent } from '@tauri-apps/plugin-deep-link'
 
 export interface UserProfile {
   id: string
@@ -178,11 +178,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     
     const setupDeepLinkListener = async () => {
       try {
-        // Listen for the auth-callback event emitted by Rust when deep link is received
-        unlistenDeepLink = await listen<{ url: string }>('auth-callback', (event) => {
-          console.log('[Auth] Deep link event received:', event.payload)
-          if (event.payload?.url) {
-            handleAuthCallback(event.payload.url)
+        // Check if app was opened via deep link on startup
+        const currentUrls = await getCurrent()
+        console.log('[Auth] Checking startup deep links:', currentUrls)
+        if (currentUrls && currentUrls.length > 0) {
+          for (const url of currentUrls) {
+            if (url.startsWith('babushkaml://auth')) {
+              console.log('[Auth] Found auth deep link on startup:', url)
+              handleAuthCallback(url)
+            }
+          }
+        }
+        
+        // Listen for deep links while app is running
+        unlistenDeepLink = await onOpenUrl((urls) => {
+          console.log('[Auth] Deep link received:', urls)
+          for (const url of urls) {
+            if (url.startsWith('babushkaml://auth')) {
+              console.log('[Auth] Processing auth deep link:', url)
+              handleAuthCallback(url)
+            }
           }
         })
         console.log('[Auth] Deep link listener setup complete')
@@ -213,12 +228,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   
   const signInWithGoogle = async () => {
     try {
-      // Get OAuth URL from Supabase with our custom redirect
+      // Get OAuth URL from Supabase with desktop-specific callback
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          skipBrowserRedirect: true, // We'll handle opening the browser ourselves
-          redirectTo: `${API_URL}/auth/callback?redirect_to=babushkaml://auth`,
+          skipBrowserRedirect: true,
+          // Use dedicated desktop callback path
+          redirectTo: `${API_URL}/auth/callback/desktop`,
         },
       })
       
@@ -238,12 +254,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInWithGitHub = async () => {
     try {
-      // Get OAuth URL from Supabase with our custom redirect
+      // Get OAuth URL from Supabase with desktop-specific callback
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'github',
         options: {
           skipBrowserRedirect: true,
-          redirectTo: `${API_URL}/auth/callback?redirect_to=babushkaml://auth`,
+          // Use dedicated desktop callback path
+          redirectTo: `${API_URL}/auth/callback/desktop`,
         },
       })
       
