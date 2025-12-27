@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
-import { supabase, validateLicense, getMachineId } from '../lib/supabase'
+import { supabase, validateLicense, getMachineId, API_URL } from '../lib/supabase'
 import type { User, Session } from '@supabase/supabase-js'
+import { listen } from '@tauri-apps/api/event'
 
 export interface UserProfile {
   id: string
@@ -86,6 +87,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState(prev => ({ ...prev, license }))
   }, [state.user])
 
+  // Handle deep link auth callback
+  const handleAuthCallback = useCallback(async (url: string) => {
+    console.log('[Auth] Received deep link callback:', url)
+    
+    // Parse the URL - format: babushkaml://auth#access_token=xxx&refresh_token=xxx&...
+    // or babushkaml://auth?access_token=xxx&refresh_token=xxx&...
+    try {
+      const hashOrQuery = url.includes('#') ? url.split('#')[1] : url.split('?')[1]
+      if (!hashOrQuery) {
+        console.error('[Auth] No tokens in callback URL')
+        return
+      }
+      
+      const params = new URLSearchParams(hashOrQuery)
+      const accessToken = params.get('access_token')
+      const refreshToken = params.get('refresh_token')
+      
+      if (accessToken && refreshToken) {
+        console.log('[Auth] Setting session from deep link tokens')
+        const { data, error } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        })
+        
+        if (error) {
+          console.error('[Auth] Failed to set session:', error)
+        } else if (data.session) {
+          console.log('[Auth] Session set successfully')
+          const { profile, license } = await fetchProfileAndLicense(data.session.user)
+          setState({
+            user: data.session.user,
+            profile,
+            session: data.session,
+            license,
+            isAuthenticated: true,
+            isLoading: false,
+          })
+        }
+      }
+    } catch (err) {
+      console.error('[Auth] Error processing auth callback:', err)
+    }
+  }, [fetchProfileAndLicense])
+
   // Initialize auth state
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
@@ -128,8 +173,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     })
 
-    return () => subscription.unsubscribe()
-  }, [fetchProfileAndLicense])
+    // Listen for deep link auth callbacks (from OAuth in browser)
+    let unlistenDeepLink: (() => void) | undefined
+    
+    const setupDeepLinkListener = async () => {
+      try {
+        // Listen for the auth-callback event emitted by Rust when deep link is received
+        unlistenDeepLink = await listen<{ url: string }>('auth-callback', (event) => {
+          console.log('[Auth] Deep link event received:', event.payload)
+          if (event.payload?.url) {
+            handleAuthCallback(event.payload.url)
+          }
+        })
+        console.log('[Auth] Deep link listener setup complete')
+      } catch (err) {
+        console.error('[Auth] Failed to setup deep link listener:', err)
+      }
+    }
+    
+    setupDeepLinkListener()
+
+    return () => {
+      subscription.unsubscribe()
+      if (unlistenDeepLink) {
+        unlistenDeepLink()
+      }
+    }
+  }, [fetchProfileAndLicense, handleAuthCallback])
 
   // Refresh license periodically (every hour)
   useEffect(() => {
@@ -138,27 +208,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(interval)
   }, [state.isAuthenticated, refreshLicense])
 
-  // For desktop apps, OAuth opens browser and we can't easily get the callback
-  // Use PKCE flow which keeps tokens in the browser, then user can copy a code
-  // OR open auth URL in system browser and handle deep link
+  // For desktop apps, OAuth opens browser with redirect back to the app via deep link
+  // Flow: App → Browser (OAuth) → Landing page callback → Deep link back to app
   
   const signInWithGoogle = async () => {
-    // For desktop app: Open OAuth in system browser
-    // The callback will be handled by the landing page, which stores the session
-    // Then user can use email/password or we can use a device code flow
-    
-    // For now, open the landing page login in browser
-    const { open } = await import('@tauri-apps/plugin-shell')
-    await open('https://babushkaml.com/login?from=desktop')
-    
-    // Show message to user that they should login in browser then return
-    // The auth state will sync when they have a session
+    try {
+      // Get OAuth URL from Supabase with our custom redirect
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          skipBrowserRedirect: true, // We'll handle opening the browser ourselves
+          redirectTo: `${API_URL}/auth/callback?redirect_to=babushkaml://auth`,
+        },
+      })
+      
+      if (error) throw error
+      if (!data.url) throw new Error('No OAuth URL returned')
+      
+      // Open the OAuth URL in the system browser
+      const { open } = await import('@tauri-apps/plugin-shell')
+      await open(data.url)
+      
+      console.log('[Auth] Opened Google OAuth in browser')
+    } catch (err) {
+      console.error('[Auth] Google OAuth error:', err)
+      throw err
+    }
   }
 
   const signInWithGitHub = async () => {
-    // Same approach - open landing page in browser
-    const { open } = await import('@tauri-apps/plugin-shell')
-    await open('https://babushkaml.com/login?from=desktop&provider=github')
+    try {
+      // Get OAuth URL from Supabase with our custom redirect
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'github',
+        options: {
+          skipBrowserRedirect: true,
+          redirectTo: `${API_URL}/auth/callback?redirect_to=babushkaml://auth`,
+        },
+      })
+      
+      if (error) throw error
+      if (!data.url) throw new Error('No OAuth URL returned')
+      
+      // Open the OAuth URL in the system browser
+      const { open } = await import('@tauri-apps/plugin-shell')
+      await open(data.url)
+      
+      console.log('[Auth] Opened GitHub OAuth in browser')
+    } catch (err) {
+      console.error('[Auth] GitHub OAuth error:', err)
+      throw err
+    }
   }
 
   const signInWithEmail = async (email: string, password: string) => {

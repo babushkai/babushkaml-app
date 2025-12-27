@@ -7,7 +7,7 @@ mod runner;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{State, AppHandle, Emitter};
+use tauri::{State, AppHandle, Emitter, Listener};
 use tokio::sync::mpsc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -2237,6 +2237,35 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .setup(|app| {
+            // Handle deep links for OAuth callback
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            {
+                let handle = app.handle().clone();
+                
+                // Listen for deep-link events from the plugin
+                app.listen("deep-link://new-url", move |event: tauri::Event| {
+                    // The payload is a JSON string containing the URLs array
+                    let payload = event.payload();
+                    eprintln!("[DEBUG] Deep link received: {}", payload);
+                    
+                    // Try to parse as JSON array of URLs
+                    if let Ok(urls) = serde_json::from_str::<Vec<String>>(payload) {
+                        for url in urls {
+                            if url.starts_with("babushkaml://auth") {
+                                eprintln!("[DEBUG] Auth deep link: {}", url);
+                                handle.emit("auth-callback", json!({ "url": url })).ok();
+                            }
+                        }
+                    } else if payload.starts_with("babushkaml://auth") {
+                        // Fallback: payload might be a single URL string
+                        handle.emit("auth-callback", json!({ "url": payload })).ok();
+                    }
+                });
+            }
+            Ok(())
+        })
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             // Workspace

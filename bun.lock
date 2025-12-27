@@ -20,6 +20,7 @@
         "@radix-ui/react-tooltip": "^1.2.8",
         "@supabase/supabase-js": "^2.89.0",
         "@tauri-apps/api": "^2.0.0",
+        "@tauri-apps/plugin-deep-link": "^2.4.5",
         "@tauri-apps/plugin-dialog": "^2.0.0",
         "@tauri-apps/plugin-fs": "^2.0.0",
         "@tauri-apps/plugin-shell": "^2.0.0",
@@ -380,6 +381,8 @@
     "@tailwindcss/vite": ["@tailwindcss/vite@4.1.18", "", { "dependencies": { "@tailwindcss/node": "4.1.18", "@tailwindcss/oxide": "4.1.18", "tailwindcss": "4.1.18" }, "peerDependencies": { "vite": "^5.2.0 || ^6 || ^7" } }, "sha512-jVA+/UpKL1vRLg6Hkao5jldawNmRo7mQYrZtNHMIVpLfLhDml5nMRUo/8MwoX2vNXvnaXNNMedrMfMugAVX1nA=="],
 
     "@tauri-apps/api": ["@tauri-apps/api@2.9.1", "", {}, "sha512-IGlhP6EivjXHepbBic618GOmiWe4URJiIeZFlB7x3czM0yDHHYviH1Xvoiv4FefdkQtn6v7TuwWCRfOGdnVUGw=="],
+
+    "@tauri-apps/plugin-deep-link": ["@tauri-apps/plugin-deep-link@2.4.5", "", { "dependencies": { "@tauri-apps/api": "^2.8.0" } }, "sha512-Zf2RTj1D9IQQ45/jqW8XTKvql24HqlPjcpv0mV/O2jHQkNe11HOTZBVj6IK37qs+MWV7xZzcmazx/QVZnhAwaQ=="],
 
     "@tauri-apps/plugin-dialog": ["@tauri-apps/plugin-dialog@2.4.2", "", { "dependencies": { "@tauri-apps/api": "^2.8.0" } }, "sha512-lNIn5CZuw8WZOn8zHzmFmDSzg5zfohWoa3mdULP0YFh/VogVdMVWZPcWSHlydsiJhRQYaTNSYKN7RmZKE2lCYQ=="],
 

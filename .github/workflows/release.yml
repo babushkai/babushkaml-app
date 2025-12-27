@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+        default: '0.1.0'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+      
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+      
+      - name: Install dependencies
+        run: bun install
+      
+      - name: Build frontend
+        run: bun run build
+      
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # For code signing (optional, requires Apple Developer account):
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'BabushkaML ${{ github.ref_name }}'
+          releaseBody: |
+            ## What's New
+            
+            - 🎨 Beautiful theme aligned with babushkaml.com  
+            - 🔐 Email/password authentication with Supabase
+            - 🌓 Light/Dark mode support
+            - 🚀 MLOps pipeline management
+
+            ## Installation
+
+            ### macOS
+
+            1. Download the DMG file below
+            2. Open the DMG and drag BabushkaML to Applications
+            3. **Important:** The app is not code-signed. Run this command in Terminal:
+               ```bash
+               xattr -cr /Applications/BabushkaML.app
+               ```
+            4. Now you can open BabushkaML normally
+
+            > ⚠️ **Why this step?** macOS Gatekeeper blocks unsigned apps downloaded from the internet.
+
+            ## System Requirements
+
+            - macOS 11.0 (Big Sur) or later
+          releaseDraft: true
+          prerelease: false
+
+  # Future: Add Windows and Linux builds
+  # build-windows:
+  #   runs-on: windows-latest
+  #   ...
+  
+  # build-linux:
+  #   runs-on: ubuntu-latest
+  #   ...
+
+
