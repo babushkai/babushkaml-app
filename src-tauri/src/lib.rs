@@ -2261,7 +2261,7 @@ async fn start_oauth_server(app: AppHandle) -> CommandResult<OAuthServerInfo> {
     use std::net::SocketAddr;
     
     // Create a channel to receive the OAuth callback
-    let (tx, rx) = oneshot::channel::<OAuthCallbackResult>();
+    let (tx, _rx) = oneshot::channel::<OAuthCallbackResult>();
     let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
     
     // Clone for the handler
@@ -2275,8 +2275,12 @@ async fn start_oauth_server(app: AppHandle) -> CommandResult<OAuthServerInfo> {
         let code = params.get("code").cloned();
         let error = params.get("error").cloned();
         
+        let has_access = access_token.is_some();
+        let has_refresh = refresh_token.is_some();
+        let has_code = code.is_some();
+        
         eprintln!("[OAuth] Callback received - access_token: {:?}, refresh_token: {:?}, code: {:?}, error: {:?}", 
-                  access_token.is_some(), refresh_token.is_some(), code.is_some(), error);
+                  has_access, has_refresh, has_code, error);
         
         let result = OAuthCallbackResult { access_token, refresh_token, code, error };
         
@@ -2290,8 +2294,8 @@ async fn start_oauth_server(app: AppHandle) -> CommandResult<OAuthServerInfo> {
         // Emit event to frontend
         let _ = app_handle.emit("oauth-callback", result);
         
-        // Return HTML response
-        let html = if code.is_some() {
+        // Return HTML response (success if we have tokens or code)
+        let html = if has_access || has_code {
             r#"
             <!DOCTYPE html>
             <html>
